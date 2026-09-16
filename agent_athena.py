@@ -1,26 +1,15 @@
-# ============================================================
-# agent_athena.py — Agent IA Athena
-# Port : 8001
-# Rôle : Reçoit les questions du widget HTML,
-#         interroge le serveur MCP (port 8000),
-#         retourne une réponse enrichie
-# ============================================================
+# agent_athena.py — Agent IA Earthquake
+# Port 8001
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
+from datetime import datetime
 
-# --- URL du serveur MCP ---
-MCP_SERVER_URL = "http://localhost:8000"
+MCP_URL = "http://localhost:8000"
 
-# --- Création de l'application FastAPI ---
-app = FastAPI(
-    title="Agent IA Athena",
-    description="Agent IA qui interroge le serveur MCP et enrichit les données",
-    version="1.0.0"
-)
+app = FastAPI(title="Athena Earthquake Agent", version="1.0.0")
 
-# --- CORS : autorise le widget HTML à communiquer avec cet agent ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,92 +17,91 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# ENDPOINT 1 — Page d'accueil de l'agent
-# URL : http://localhost:8001/
-# ============================================================
 @app.get("/")
 def accueil():
     return {
-        "agent": "Athena IA",
+        "agent": "Athena Earthquake Agent",
         "status": "✅ En ligne",
         "port": 8001,
-        "description": "Je suis l'agent IA qui connecte le widget au serveur MCP",
-        "mcp_connecte": MCP_SERVER_URL,
-        "endpoints": ["/", "/ask"]
+        "mcp": MCP_URL,
+        "endpoints": ["/", "/ask", "/search"]
     }
 
-# ============================================================
-# ENDPOINT 2 — Question à l'agent
-# URL : http://localhost:8001/ask
-# Rôle : Interroge le MCP et retourne une réponse enrichie
-# ============================================================
 @app.get("/ask")
-async def ask():
+async def ask(
+    minmagnitude: float = Query(default=4.0),
+    limit: int = Query(default=10),
+    period: str = Query(default="week")
+):
     try:
-        # --- Étape 1 : L'agent appelle le serveur MCP ---
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{MCP_SERVER_URL}/data",
-                timeout=10.0
+                f"{MCP_URL}/earthquakes",
+                params={"minmagnitude": minmagnitude, "limit": limit, "period": period},
+                timeout=15.0
             )
             mcp_data = response.json()
 
-        # --- Étape 2 : L'agent enrichit les données ---
-        contenu = mcp_data.get("contenu", {})
-        activite = contenu.get("activite", "inconnue")
-        type_activite = contenu.get("type", "inconnu")
-        participants = contenu.get("participants", 0)
-        accessibilite = contenu.get("accessibilite", 0)
+        earthquakes = mcp_data.get("earthquakes", [])
 
-        # --- Étape 3 : L'agent génère une réponse intelligente ---
-        if accessibilite <= 0.25:
-            niveau = "🟢 Très accessible"
-        elif accessibilite <= 0.5:
-            niveau = "🟡 Modérément accessible"
-        elif accessibilite <= 0.75:
-            niveau = "🟠 Peu accessible"
+        if not earthquakes:
+            return {
+                "agent": "Athena",
+                "status": "⚠️ Aucune donnée",
+                "message": "Aucun séisme trouvé pour ces critères.",
+                "earthquakes": []
+            }
+
+        magnitudes = [e["magnitude"] for e in earthquakes if e["magnitude"]]
+        mag_max = max(magnitudes) if magnitudes else 0
+        mag_moy = round(sum(magnitudes) / len(magnitudes), 2) if magnitudes else 0
+        tsunamis = sum(1 for e in earthquakes if e["tsunami"] == "⚠️ Oui")
+
+        if mag_max >= 7.0:
+            alerte_globale = "🔴 MAJEUR — Séismes très dangereux détectés"
+        elif mag_max >= 5.5:
+            alerte_globale = "🟠 ÉLEVÉ — Séismes significatifs"
+        elif mag_max >= 4.5:
+            alerte_globale = "🟡 MODÉRÉ — Séismes notables"
         else:
-            niveau = "🔴 Difficile d'accès"
+            alerte_globale = "🟢 FAIBLE — Activité sismique normale"
 
-        if participants == 1:
-            groupe = "activité solo"
-        elif participants <= 3:
-            groupe = "petit groupe"
-        else:
-            groupe = "grand groupe"
-
-        # --- Étape 4 : Retourne la réponse complète au widget ---
         return {
-            "agent": "Athena IA",
-            "status": "✅ Réponse générée",
-            "analyse": {
-                "activite_suggeree": activite,
-                "categorie": type_activite,
-                "format": groupe,
-                "accessibilite": niveau,
-                "conseil": f"💡 Athena suggère : '{activite}' — parfait pour un {groupe} !"
+            "agent": "Athena Earthquake Agent",
+            "status": "✅ Analyse complète",
+            "alerte_globale": alerte_globale,
+            "statistiques": {
+                "total_seismes": len(earthquakes),
+                "magnitude_max": mag_max,
+                "magnitude_moyenne": mag_moy,
+                "alertes_tsunami": tsunamis,
+                "periode": period
             },
+            "earthquakes": earthquakes,
             "source_mcp": {
-                "url": f"{MCP_SERVER_URL}/data",
-                "status": mcp_data.get("status", "inconnu"),
-                "source_api": mcp_data.get("source", "inconnue")
+                "url": f"{MCP_URL}/earthquakes",
+                "source": mcp_data.get("source", "USGS"),
+                "status": mcp_data.get("status", "")
             },
-            "architecture": "Widget → Agent Athena :8001 → MCP :8000 → API Externe"
+            "architecture": "Widget → Agent Athena :8001 → MCP :8000 → USGS API"
         }
 
     except Exception as e:
         return {
-            "agent": "Athena IA",
+            "agent": "Athena",
             "status": "❌ Erreur",
             "erreur": str(e),
-            "conseil": "⚠️ Vérifie que le serveur MCP tourne sur le port 8000",
-            "architecture": "Widget → Agent Athena :8001 → MCP :8000 → API Externe"
+            "earthquakes": []
         }
 
-# ============================================================
-# LANCEMENT DU SERVEUR (si on lance ce fichier directement)
-# ============================================================
+@app.get("/search")
+async def search(
+    minmagnitude: float = Query(default=5.0),
+    period: str = Query(default="month"),
+    limit: int = Query(default=5)
+):
+    return await ask(minmagnitude=minmagnitude, limit=limit, period=period)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("agent_athena:app", host="0.0.0.0", port=8001, reload=True)

@@ -1,21 +1,12 @@
-# ============================================================
-# mcp_server.py — Serveur MCP (Model Context Protocol)
-# Port : 8000
-# Rôle : Fournir des données à l'agent IA via une API REST
-# ============================================================
+# mcp_server.py — Serveur MCP Earthquake
+# Port 8000
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 
-# --- Création de l'application FastAPI ---
-app = FastAPI(
-    title="Serveur MCP",
-    description="Serveur MCP qui fournit des données à l'agent IA Athena",
-    version="1.0.0"
-)
+app = FastAPI(title="MCP Earthquake Server", version="1.0.0")
 
-# --- CORS : autorise le widget HTML à communiquer avec ce serveur ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,71 +14,72 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================
-# ENDPOINT 1 — Page d'accueil
-# URL : http://localhost:8000/
-# ============================================================
 @app.get("/")
 def accueil():
     return {
-        "service": "Serveur MCP",
+        "service": "MCP Earthquake Server",
         "status": "✅ En ligne",
         "port": 8000,
-        "description": "Je fournis des données à l'agent IA Athena",
-        "endpoints": ["/", "/data"]
+        "endpoints": ["/", "/earthquakes"]
     }
 
-# ============================================================
-# ENDPOINT 2 — Données principales
-# URL : http://localhost:8000/data
-# Rôle : Appelle une API externe et retourne les données
-# ============================================================
-@app.get("/data")
-async def get_data():
-    # On appelle une API externe publique (activité aléatoire)
-    url = "https://www.boredapi.com/api/activity"
-    
+@app.get("/earthquakes")
+async def get_earthquakes(
+    minmagnitude: float = Query(default=4.0, description="Magnitude minimale"),
+    limit: int = Query(default=10, description="Nombre de résultats"),
+    period: str = Query(default="week", description="Période: day, week, month")
+):
+    url = f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/{_get_feed(minmagnitude, period)}.geojson"
+
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=5.0)
-            data = response.json()
-            
-            return {
-                "source": "API Externe (BoredAPI)",
-                "status": "✅ Données reçues",
-                "contenu": {
-                    "activite": data.get("activity", "Non disponible"),
-                    "type": data.get("type", "Non disponible"),
-                    "participants": data.get("participants", 0),
-                    "accessibilite": data.get("accessibility", 0)
-                },
-                "mcp_info": {
-                    "serveur": "MCP Port 8000",
-                    "protocole": "REST/HTTP"
-                }
-            }
-    
-    except Exception as e:
-        # Si l'API externe est indisponible, on retourne des données de secours
+            response = await client.get(url, timeout=10.0)
+            raw = response.json()
+
+        features = raw.get("features", [])[:limit]
+        earthquakes = []
+
+        for f in features:
+            props = f.get("properties", {})
+            geo = f.get("geometry", {}).get("coordinates", [0, 0, 0])
+            earthquakes.append({
+                "lieu": props.get("place", "Inconnu"),
+                "magnitude": props.get("mag", 0),
+                "profondeur_km": round(geo[2], 1) if len(geo) > 2 else 0,
+                "heure_utc": props.get("time", 0),
+                "alerte": props.get("alert", "aucune"),
+                "tsunami": "⚠️ Oui" if props.get("tsunami", 0) == 1 else "Non",
+                "url_detail": props.get("url", "")
+            })
+
         return {
-            "source": "Données locales (API externe indisponible)",
-            "status": "⚠️ Mode secours",
-            "contenu": {
-                "activite": "Apprendre FastAPI et MCP",
-                "type": "education",
-                "participants": 1,
-                "accessibilite": 0.0
-            },
-            "mcp_info": {
-                "serveur": "MCP Port 8000",
-                "protocole": "REST/HTTP"
-            },
-            "erreur": str(e)
+            "source": "USGS Earthquake Hazards Program",
+            "status": "✅ Données reçues",
+            "periode": period,
+            "magnitude_min": minmagnitude,
+            "total": len(earthquakes),
+            "earthquakes": earthquakes
         }
 
-# ============================================================
-# LANCEMENT DU SERVEUR (si on lance ce fichier directement)
-# ============================================================
+    except Exception as e:
+        return {
+            "source": "USGS",
+            "status": "❌ Erreur",
+            "erreur": str(e),
+            "earthquakes": []
+        }
+
+def _get_feed(mag: float, period: str) -> str:
+    if mag >= 7.0:
+        level = "significant"
+    elif mag >= 4.5:
+        level = "4.5"
+    elif mag >= 2.5:
+        level = "2.5"
+    else:
+        level = "all"
+    return f"{level}_{period}"
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("mcp_server:app", host="0.0.0.0", port=8000, reload=True)
